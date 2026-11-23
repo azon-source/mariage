@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mariage VIP – Accès</title>
+<style>
+[hidden]{display:none!important}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.5 Georgia,serif;background:#f3e9d8;color:#4a3326}
+header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#4a3326;color:#fbf7ef}
+nav{display:flex;gap:6px;overflow-x:auto;padding:8px;background:#e8dcc6}
+nav button{white-space:nowrap}
+nav .on{background:#b8933f;color:#fff}
+#view{padding:12px;max-width:640px;margin:auto}
+#login{max-width:420px;margin:10vh auto;padding:12px}
+button{font:inherit;padding:10px 14px;border:0;border-radius:8px;background:#4a3326;color:#fbf7ef;margin:4px 4px 4px 0}
+button.g{background:#fbf7ef;color:#4a3326;border:1px solid #b8933f}
+input,select{font:inherit;width:100%;padding:10px;margin:4px 0;border:1px solid #b8933f;border-radius:8px;background:#fbf7ef;color:#4a3326}
+:focus-visible{outline:3px solid #b8933f;outline-offset:2px}
+.box{background:#fbf7ef;border:1px solid #b8933f;border-radius:12px;padding:12px;margin:10px 0}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.t{background:#fbf7ef;border:1px solid #b8933f;border-radius:12px;padding:14px;text-align:center}
+.t b{display:block;font-size:2rem;color:#8a6a1f}
+.r{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;background:#fbf7ef;border-radius:10px;padding:10px;margin:6px 0}
+.r button{padding:6px 10px;font-size:.85rem}
+#reader{width:100%;max-width:420px;margin:auto}
+#ov{position:fixed;inset:0;z-index:9;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;color:#fff;padding:20px}
+#ov.ok{background:#1e8a4c}#ov.ko{background:#b3261e}#ov.wa{background:#c76e00}
+#ov h1,#ov p{white-space:pre-line}#ov p{font-size:1.4rem}
+#ov button{background:#fff;color:#222;font-size:1.2rem;padding:14px 28px}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#4a3326;color:#fff;padding:10px 16px;border-radius:20px;z-index:20}
+#sheet{display:none}
+@media print{body>*:not(#sheet){display:none!important}#sheet{display:grid;grid-template-columns:repeat(2,90mm);justify-content:center}#sheet img{width:90mm;height:54mm;display:block;outline:.2mm dashed #bbb}@page{size:A4;margin:10mm}}
+</style></head><body>
+<div id="login"><form id="lf" class="box"><h2>Mariage VIP</h2><p>Connexion réservée à l’organisation.</p>
+<input id="em" type="email" placeholder="Adresse e-mail" autocomplete="username" required>
+<input id="pw" type="password" placeholder="Mot de passe" autocomplete="current-password" required>
+<button>Se connecter</button></form></div>
+<div id="main" hidden><header><b>Mariage VIP</b><button class="g" id="lo">Déconnexion</button></header><nav id="nav"></nav><div id="view"></div></div>
+<div id="ov" hidden></div><div id="toast" hidden></div><div id="sheet"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+<script>
+const db=supabase.createClient("https://rvewrnghuiwpchiitezi.supabase.co","sb_publishable_rEs5O5ezsSWJtkRS5dBprg_Bd38wxtl");
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+let role=null,cards=[],qr=null,busy=false,timer=null;
+function toast(m){const t=$("#toast");t.textContent=m;t.hidden=false;clearTimeout(t._h);t._h=setTimeout(()=>t.hidden=true,3500)}
+async function rpc(f,a){const {data,error}=await db.rpc(f,a||{});if(error){toast(error.message);return null}return data}
+$("#lf").onsubmit=async e=>{e.preventDefault();const {error}=await db.auth.signInWithPassword({email:$("#em").value.trim(),password:$("#pw").value});if(error)return toast("E-mail ou mot de passe incorrect");boot()};
+$("#lo").onclick=async()=>{await db.auth.signOut();location.reload()};
+async function boot(){
+ const {data}=await db.auth.getSession();
+ if(!data.session){$("#login").hidden=false;$("#main").hidden=true;return}
+ $("#login").hidden=true;$("#main").hidden=false;
+ role=await rpc("api_ma_role");
+ if(!role){$("#nav").innerHTML="";$("#view").innerHTML="<p>Ce compte n’a aucun droit d’accès. Contactez l’organisateur.</p>";return}
+ const T=role=="admin"?[["stats","Tableau de bord"],["inv","Invités"],["res","Réserve"],["his","Historique"],["scan","Contrôle"]]:[["scan","Contrôle"]];
+ $("#nav").innerHTML=T.map(([k,l])=>`<button data-t="${k}">${l}</button>`).join("");
+ $("#nav").onclick=e=>{const b=e.target.closest("button");if(b)go(b.dataset.t)};
+ go(T[0][0]);
+}
+async function go(t){
+ await stopCam();clearInterval(timer);
+ document.querySelectorAll("#nav button").forEach(b=>b.classList.toggle("on",b.dataset.t==t));
+ const V={stats:vStats,inv:vInv,res:vRes,his:vHis,scan:vScan};V[t]();
+ if(t=="stats")timer=setInterval(vStats,10000);
+}
+async function vStats(){
+ const s=await rpc("api_stats");if(!s)return;
+ const L=[["invites_actifs","Invités actifs"],["nominatives","Cartes nominatives"],["entres","Déjà entrés"],["attendus","Encore attendus"],["reserve_generees","Réserve générées"],["reserve_disponibles","Réserve disponibles"],["reserve_attribuees","Réserve attribuées"],["refus","Accès refusés"]];
+ $("#view").innerHTML='<div class="grid">'+L.map(([k,l])=>`<div class="t"><b>${s[k]}</b>${l}</div>`).join("")+'</div><p>Mise à jour automatique toutes les 10 secondes.</p>';
+}
+async function vInv(){
+ cards=await rpc("api_liste_cartes")||[];
+ $("#view").innerHTML=`<form id="f" class="box"><h3>Ajouter un invité</h3><input id="n" placeholder="Nom" required><input id="p" placeholder="Prénom" required><input id="t" placeholder="WhatsApp (facultatif)" inputmode="tel"><button>Créer l’invitation</button></form>
+<input id="q" placeholder="Rechercher un nom, un prénom ou un numéro"><select id="fl"><option value="">Toutes les cartes</option><option value="ENTRE">Déjà entrés</option><option value="ATT">Encore attendus</option><option value="NOM">Nominatives</option><option value="RES">Réserve non attribuées</option><option value="DES">Désactivées</option></select><button id="ex" class="g">Exporter en CSV</button><div id="ls"></div>`;
+ $("#f").onsubmit=async e=>{e.preventDefault();const r=await rpc("api_creer_nominative",{p_nom:$("#n").value.trim(),p_prenom:$("#p").value.trim(),p_tel:$("#t").value.trim()});if(r){toast("Invitation créée : "+r.numero);vInv()}};
+ $("#q").oninput=lst;$("#fl").onchange=lst;$("#ex").onclick=csv;
+ $("#ls").onclick=async e=>{
+  const b=e.target.closest("button");if(!b)return;
+  const c=cards.find(x=>x.numero==b.dataset.n),a=b.dataset.a;
+  if(a=="png")sendCard(c);
+  else if(a=="prt")printCards([c]);
+  else if(a=="off"&&confirm("Désactiver "+c.numero+" ?")){await rpc("api_desactiver",{p_numero:c.numero});vInv()}
+  else if(a=="rst"&&confirm("Annuler l’entrée de "+c.numero+" ?")){await rpc("api_reinitialiser_entree",{p_numero:c.numero});vInv()}
+ };
+ lst();
+}
+function lst(){
+ const q=$("#q").value.toLowerCase(),f=$("#fl").value;
+ const m=cards.filter(c=>(c.numero+" "+(c.nom||"")+" "+(c.prenom||"")).toLowerCase().includes(q)&&(!f||(f=="ENTRE"&&c.presence=="ENTRE")||(f=="ATT"&&c.statut=="ACTIVE"&&c.presence=="PAS_ENTRE")||(f=="NOM"&&c.type=="nominative")||(f=="RES"&&c.statut=="NON_ATTRIBUEE")||(f=="DES"&&c.statut=="DESACTIVEE")));
+ $("#ls").innerHTML=m.map(c=>`<div class="r"><div><b>${c.numero}</b> ${esc(c.prenom)} ${esc(c.nom)}<br><small>${c.statut.replace("_"," ")} – ${c.presence=="ENTRE"?"entré à "+new Date(c.entre_le).toLocaleTimeString("fr-FR"):"pas entré"}</small></div><div><button data-a="png" data-n="${c.numero}">Carte</button><button class="g" data-a="prt" data-n="${c.numero}">Imprimer</button>${c.statut!="DESACTIVEE"?`<button class="g" data-a="off" data-n="${c.numero}">Désactiver</button>`:""}${c.presence=="ENTRE"?`<button class="g" data-a="rst" data-n="${c.numero}">Annuler l’entrée</button>`:""}</div></div>`).join("")||"<p>Aucune carte.</p>";
+}
+function csv(){
+ const h="Numero;Nom;Prenom;Telephone;Type;Statut;Presence;Entre le\n";
+ const b=cards.map(c=>[c.numero,c.nom,c.prenom,c.telephone,c.type,c.statut,c.presence,c.entre_le].map(v=>'"'+String(v??"").replace(/"/g,'""')+'"').join(";")).join("\n");
+ const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\ufeff"+h+b],{type:"text/csv"}));a.download="invites.csv";a.click();
+}
+async function vRes(){
+ cards=await rpc("api_liste_cartes")||[];
+ const r=cards.filter(c=>c.type=="reserve"),d=r.filter(c=>c.statut=="NON_ATTRIBUEE");
+ $("#view").innerHTML=`<div class="box"><h3>Cartes de réserve</h3><p>${r.length} générées, ${d.length} disponibles, ${r.length-d.length} attribuées.</p><input id="nb" type="number" min="1" max="500" value="20"><button id="gen">Générer des cartes</button><button id="pd" class="g">Imprimer les cartes disponibles (A4)</button></div>
+<div class="box"><h3>Attribution rapide</h3><div id="reader"></div><button id="sc" class="g">Scanner la carte</button><input id="no" placeholder="Numéro de la carte (VIP-0001)"><input id="an" placeholder="Nom"><input id="ap" placeholder="Prénom"><input id="at" placeholder="WhatsApp (facultatif)" inputmode="tel"><button id="ok">Confirmer l’attribution</button></div>`;
+ $("#gen").onclick=async()=>{const n=+$("#nb").value;if(await rpc("api_generer",{p_nombre:n})){toast(n+" cartes créées");vRes()}};
+ $("#pd").onclick=()=>d.length?printCards(d):toast("Aucune carte disponible");
+ $("#sc").onclick=()=>startCam(async t=>{
+  const c=cards.find(x=>x.jeton==t);await stopCam();
+  if(!c)return toast("Carte non reconnue");
+  $("#no").value=c.numero;toast(c.statut=="NON_ATTRIBUEE"?"Carte "+c.numero+" prête à attribuer":"Carte "+c.numero+" déjà attribuée");
+ });
+ $("#ok").onclick=async()=>{
+  const no=$("#no").value.trim().toUpperCase(),n=$("#an").value.trim(),p=$("#ap").value.trim();
+  if(!no||!n||!p)return toast("Numéro, nom et prénom sont obligatoires");
+  const r=await rpc("api_attribuer",{p_numero:no,p_nom:n,p_prenom:p,p_tel:$("#at").value.trim()});
+  if(!r)return;
+  if(r.resultat=="ATTRIBUEE"){toast("Carte "+no+" attribuée à "+p+" "+n);vRes()}
+  else toast(r.resultat=="DEJA_ATTRIBUEE"?"Refusé : cette carte est déjà attribuée":"Numéro introuvable");
+ };
+}
+async function vHis(){
+ const h=await rpc("api_historique",{p_limite:200})||[];
+ $("#view").innerHTML=h.map(x=>`<div class="r"><div><b>${esc(x.action)}</b> ${esc(x.resultat)} ${esc(x.carte_numero)}<br><small>${new Date(x.date_heure).toLocaleString("fr-FR")} – ${esc(x.auteur)} ${esc(x.detail)}</small></div></div>`).join("")||"<p>Aucune opération.</p>";
+}
+function vScan(){
+ $("#view").innerHTML='<div id="reader"></div><button id="go">Activer la caméra</button>';
+ $("#go").onclick=()=>{$("#go").hidden=true;startCam(onScan)};
+}
+async function startCam(cb){
+ await stopCam();qr=new Html5Qrcode("reader");busy=false;
+ try{await qr.start({facingMode:"environment"},{fps:10,qrbox:{width:250,height:250}},t=>{if(busy)return;busy=true;try{qr.pause(true)}catch(e){}cb(t.trim())},()=>{})}
+ catch(e){toast("Caméra indisponible : autorisez-la dans le navigateur")}
+}
+async function stopCam(){if(qr){try{await qr.stop()}catch(e){}qr=null}}
+function result(c,t,d){
+ const o=$("#ov");o.className=c;o.innerHTML=`<h1>${esc(t)}</h1><p>${esc(d)}</p><button>Scanner suivant</button>`;o.hidden=false;
+ if(navigator.vibrate)navigator.vibrate(c=="ok"?80:[200,100,200]);
+ o.querySelector("button").onclick=()=>{o.hidden=true;busy=false;try{qr.resume()}catch(e){}};
+}
+async function onScan(t){
+ let r;
+ try{const {data,error}=await db.rpc("api_scan",{p_jeton:t});if(error)throw error;r=data}
+ catch(e){return result("wa","VÉRIFICATION IMPOSSIBLE","Connexion ou accès en échec.\nContrôler cette personne manuellement.")}
+ const n=((r.prenom||"")+" "+(r.nom||"")).trim(),h=r.heure?new Date(r.heure).toLocaleTimeString("fr-FR"):"";
+ const M={
+  AUTORISE:["ok","ACCÈS AUTORISÉ",n+"\n"+r.numero+"\nHeure : "+h+"\nStatut : DÉJÀ ENTRÉ"],
+  DEJA_UTILISEE:["ko","ACCÈS REFUSÉ\nINVITATION DÉJÀ UTILISÉE",n+"\n"+r.numero+"\nPremier passage : "+h],
+  INCONNUE:["ko","ACCÈS REFUSÉ\nINVITATION NON RECONNUE",""],
+  NON_ATTRIBUEE:["ko","ACCÈS REFUSÉ\nCARTE NON ATTRIBUÉE",r.numero||""],
+  DESACTIVEE:["ko","ACCÈS REFUSÉ\nINVITATION DÉSACTIVÉE",r.numero||""]
+ };
+ result(...(M[r.resultat]||["wa","VÉRIFICATION IMPOSSIBLE","Réponse inattendue."]));
+}
+function cardCanvas(c){
+ const W=1063,H=638,k=document.createElement("canvas");k.width=W;k.height=H;const x=k.getContext("2d");
+ x.fillStyle="#fbf7ef";x.fillRect(0,0,W,H);
+ x.strokeStyle="#b8933f";x.lineWidth=6;x.strokeRect(18,18,W-36,H-36);x.lineWidth=2;x.strokeRect(34,34,W-68,H-68);
+ x.textAlign="left";
+ x.fillStyle="#8a6a1f";x.font="bold 34px Georgia,serif";x.fillText("INVITATION SPÉCIALE",70,110);
+ x.fillStyle="#4a3326";x.font="italic 26px Georgia,serif";x.fillText("Accès réception privée",70,152);
+ x.fillStyle="#b8933f";x.fillRect(70,176,200,3);
+ const nm=((c.prenom||"")+" "+(c.nom||"")).trim();
+ if(nm){let f=56;do{x.font="bold "+f+"px Georgia,serif";f-=2}while(x.measureText(nm).width>560&&f>22);x.fillStyle="#4a3326";x.fillText(nm,70,300)}
+ else{x.fillStyle="#7a6552";x.font="italic 24px Georgia,serif";x.fillText("Nom :",70,300);x.fillRect(150,304,430,1.5)}
+ x.fillStyle="#4a3326";x.font="34px Georgia,serif";x.fillText("19 décembre 2026",70,390);
+ x.fillStyle="#8a6a1f";x.font="bold 30px Georgia,serif";x.fillText("N° "+c.numero,70,450);
+ x.fillStyle="#4a3326";x.font="italic 21px Georgia,serif";x.fillText("Carte personnelle et non transférable",70,H-62);
+ const q=qrcode(0,"M");q.addData(c.jeton);q.make();
+ const n=q.getModuleCount(),m=Math.floor(340/(n+8)),S=m*(n+8),ox=W-60-S,oy=140;
+ x.fillStyle="#fff";x.fillRect(ox,oy,S,S);x.fillStyle="#000";
+ for(let i=0;i<n;i++)for(let j=0;j<n;j++)if(q.isDark(i,j))x.fillRect(ox+(j+4)*m,oy+(i+4)*m,m,m);
+ return k;
+}
+function sendCard(c){
+ cardCanvas(c).toBlob(async b=>{
+  const f=new File([b],c.numero+".png",{type:"image/png"});
+  if(navigator.canShare&&navigator.canShare({files:[f]})){try{await navigator.share({files:[f]});return}catch(e){if(e.name=="AbortError")return}}
+  const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=f.name;a.click();
+ });
+}
+async function printCards(a){
+ const s=$("#sheet");s.innerHTML=a.map(c=>`<img src="${cardCanvas(c).toDataURL("image/png")}">`).join("");
+ await Promise.all([...s.children].map(i=>i.decode().catch(()=>{})));
+ print();
+}
+boot();
+</script></body></html>
